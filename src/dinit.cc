@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <list>
+#include <vector>
 #include <cstring>
 #include <csignal>
 #include <cstddef>
@@ -204,6 +205,7 @@ struct options {
     bool log_specified = false;
 
     bool process_sys_args = false;
+    bool ignore_sys_args = false;
 
     service_dir_opt service_dir_opts;
 
@@ -342,6 +344,9 @@ static int process_commandline_arg(char **argv, int argc, int &i, options &opts)
             console_service_status = false;
             log_level[DLOG_CONS] = loglevel_t::ZERO;
         }
+        else if (strcmp(argv[i], "--ignore-sys-args") == 0) {
+            opts.ignore_sys_args = true;
+        }
         else if (strcmp(argv[i], "--console-level") == 0) {
             loglevel_t wanted_level;
             if (!arg_to_loglevel("--console-level", wanted_level)) return 1;
@@ -400,19 +405,20 @@ static int process_commandline_arg(char **argv, int argc, int &i, options &opts)
                     #endif
                     " --log-file <file>, -l <file> log to the specified file\n"
                     " --quiet, -q                  disable output to standard output\n"
+                    " --ignore-sys-args            ignore arguments from kernel\n"
                     " <service-name>, --service <service-name>, -t <service-name>\n"
                     "                              start service with name <service-name>\n";
             return -1;
         }
         else {
             // unrecognized
-            if (!opts.process_sys_args) {
+            if (!opts.process_sys_args && !opts.ignore_sys_args) {
                 cerr << "dinit: unrecognized option: " << argv[i] << endl;
                 return 1;
             }
         }
     }
-    else {
+    else if (!opts.ignore_sys_args) {
         if (argv[i][0] == '\0') {
             cerr << "dinit: error: empty command-line argument\n";
             return 1;
@@ -702,7 +708,22 @@ int dinit_main(int argc, char **argv)
     if (am_system_mgr) {
         if (shutdown_type == shutdown_type_t::SOFTREBOOT) {
             sync(); // Sync to minimise data loss if user elects to power off / hard reset
-            execv(dinit_exec, argv);
+            if (!opts.ignore_sys_args) {
+                char **argv_exec = (char **)malloc((argc + 2) * sizeof(char *));
+                char additional_arg[] = "--ignore-sys-args";
+                argv_exec[0] = argv[0];
+                argv_exec[1] = additional_arg;
+                for (int i = 1; i < argc; i++) {
+                    argv_exec[i + 1] = argv[i];
+                }
+                argv_exec[argc + 1] = NULL;
+
+                execv(dinit_exec, argv_exec);
+
+                free(argv_exec);
+            }
+            else
+                execv(dinit_exec, argv);
         
             // reboot if soft-reboot fails
             log(loglevel_t::ERROR, "Could not restart dinit. Will attempt reboot.");
